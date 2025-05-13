@@ -3,6 +3,8 @@
 
 import os
 import glob
+import tempfile
+import json
 from weasyprint import HTML, CSS
 from weasyprint.document import (
     Document,
@@ -139,6 +141,91 @@ def create_pdf_from_html_folder(input_folder, output_pdf_filename, orientation="
                     )
 
 
+def load_history():
+    """Cargar el historial de rutas usadas anteriormente"""
+    config_dir = os.path.expanduser("~/.config/pdf-creator")
+    history_file = os.path.join(config_dir, "history.json")
+    
+    # Crear directorio de configuración si no existe
+    if not os.path.exists(config_dir):
+        os.makedirs(config_dir, exist_ok=True)
+    
+    # Cargar historial existente o crear uno nuevo
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Advertencia: No se pudo cargar el historial: {e}")
+    
+    # Devolver estructura vacía si no hay historial o hubo error
+    return {"input_paths": []}
+
+def save_history(history):
+    """Guardar el historial de rutas usadas"""
+    config_dir = os.path.expanduser("~/.config/pdf-creator")
+    history_file = os.path.join(config_dir, "history.json")
+    
+    try:
+        with open(history_file, 'w') as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"Advertencia: No se pudo guardar el historial: {e}")
+
+def update_input_history(path):
+    """Actualizar el historial de rutas de entrada"""
+    history = load_history()
+    
+    # Eliminar la ruta si ya existe en el historial
+    if path in history["input_paths"]:
+        history["input_paths"].remove(path)
+    
+    # Añadir la ruta al principio de la lista
+    history["input_paths"].insert(0, path)
+    
+    # Mantener solo las últimas 3 rutas
+    history["input_paths"] = history["input_paths"][:3]
+    
+    # Guardar el historial actualizado
+    save_history(history)
+
+def get_input_directory_with_history():
+    """Solicitar la ruta de entrada con sugerencias del historial"""
+    try:
+        history = load_history()
+        input_paths = history.get("input_paths", [])
+        
+        if input_paths:
+            print("Rutas usadas recientemente:")
+            for i, path in enumerate(input_paths, 1):
+                print(f"  {i}. {path}")
+            
+            try:
+                choice = input("\nSelecciona una ruta (1-3) o ingresa una nueva ruta: ").strip()
+                
+                # Verificar si se seleccionó una ruta del historial
+                if choice.isdigit() and 1 <= int(choice) <= len(input_paths):
+                    return input_paths[int(choice) - 1]
+                else:
+                    # Si no es un número válido, tratar como una nueva ruta
+                    return choice
+            except EOFError:
+                # Si hay un error EOF, usar la primera ruta del historial
+                print(f"\nUsando la ruta más reciente: {input_paths[0]}")
+                return input_paths[0]
+        else:
+            # Si no hay historial, simplemente solicitar la ruta
+            try:
+                return input("Ingresa la ruta de la carpeta que contiene tus archivos HTML: ").strip()
+            except EOFError:
+                # Si hay un error EOF y no hay historial, usar una ruta predeterminada
+                print("\nError: No se pudo leer la entrada. Por favor, especifica la ruta con --input.")
+                sys.exit(1)
+    except Exception as e:
+        print(f"Error al obtener el directorio de entrada: {e}")
+        print("Por favor, especifica la ruta con --input.")
+        sys.exit(1)
+
 if __name__ == "__main__":
     import sys
     import argparse
@@ -171,30 +258,55 @@ if __name__ == "__main__":
 
     # Determinar si usar modo interactivo o argumentos de línea de comandos
     if args.interactive or (not args.input):
-        # Modo interactivo
-        input_directory = input(
-            "Ingresa la ruta de la carpeta que contiene tus archivos HTML: "
-        ).strip()
-        
-        # Sugerir un nombre de archivo por defecto en la misma carpeta
-        default_output_name = os.path.join(input_directory, "output.pdf")
-        output_prompt = f"Ingresa el nombre para el archivo PDF de salida [predeterminado: {default_output_name}]: "
-        output_pdf_name = input(output_prompt).strip()
-        
-        # Si no se proporciona un nombre, usar el predeterminado
-        if not output_pdf_name:
-            output_pdf_name = default_output_name
-        # Si solo se proporciona un nombre sin ruta, colocarlo en la carpeta de entrada
-        elif not os.path.isabs(output_pdf_name) and not os.path.dirname(output_pdf_name):
-            output_pdf_name = os.path.join(input_directory, output_pdf_name)
-        
-        # Preguntar por la orientación
-        orientation_choice = input(
-            "Selecciona la orientación de página (1 para vertical/portrait, 2 para apaisada/landscape): "
-        ).strip()
-        
-        # Determinar la orientación basada en la elección del usuario
-        page_orientation = "portrait" if orientation_choice == "1" else "landscape"
+        try:
+            # Modo interactivo con historial
+            input_directory = get_input_directory_with_history()
+            
+            # Sugerir un nombre de archivo por defecto en la misma carpeta
+            default_output_name = os.path.join(input_directory, "output.pdf")
+            output_prompt = f"Ingresa el nombre para el archivo PDF de salida [predeterminado: {default_output_name}]: "
+            
+            try:
+                output_pdf_name = input(output_prompt).strip()
+            except EOFError:
+                print(f"\nUsando nombre predeterminado: {default_output_name}")
+                output_pdf_name = ""
+            
+            # Si no se proporciona un nombre, usar el predeterminado
+            if not output_pdf_name:
+                output_pdf_name = default_output_name
+            # Si solo se proporciona un nombre sin ruta, colocarlo en la carpeta de entrada
+            elif not os.path.isabs(output_pdf_name) and not os.path.dirname(output_pdf_name):
+                output_pdf_name = os.path.join(input_directory, output_pdf_name)
+            
+            # Preguntar por la orientación
+            try:
+                orientation_choice = input(
+                    "Selecciona la orientación de página (1 para vertical/portrait, 2 para apaisada/landscape): "
+                ).strip()
+            except EOFError:
+                print("\nUsando orientación predeterminada: apaisada (landscape)")
+                orientation_choice = "2"
+            
+            # Determinar la orientación basada en la elección del usuario
+            page_orientation = "portrait" if orientation_choice == "1" else "landscape"
+        except Exception as e:
+            print(f"\nError en modo interactivo: {e}")
+            print("Ejecutando en modo no interactivo con valores predeterminados.")
+            
+            # Usar valores predeterminados o argumentos de línea de comandos si están disponibles
+            if args.input:
+                input_directory = args.input
+            else:
+                print("Error: Se requiere especificar la carpeta de entrada con --input")
+                sys.exit(1)
+                
+            if args.output:
+                output_pdf_name = args.output
+            else:
+                output_pdf_name = os.path.join(input_directory, "output.pdf")
+                
+            page_orientation = "portrait" if args.portrait else "landscape"
     else:
         # Modo no interactivo (argumentos de línea de comandos)
         if not args.input:
@@ -224,5 +336,8 @@ if __name__ == "__main__":
     orientation_display = "vertical (portrait)" if page_orientation == "portrait" else "apaisada (landscape)"
     print(f"\nUsando orientación {orientation_display} para el PDF.")
 
-    # Crear el PDF
+    # Actualizar el historial con la ruta de entrada usada
+    update_input_history(input_directory)
+    
+    # Crear el PDF a partir de los archivos HTML
     create_pdf_from_html_folder(input_directory, output_pdf_name, page_orientation)
