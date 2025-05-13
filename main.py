@@ -150,7 +150,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "-i", "--input", help="Ruta de la carpeta que contiene los archivos HTML"
     )
-    parser.add_argument("-o", "--output", help="Nombre del archivo PDF de salida")
+    parser.add_argument(
+        "-o", "--output", 
+        help="Nombre del archivo PDF de salida. Si no se especifica una ruta, se guardará en la misma carpeta que los archivos HTML"
+    )
     parser.add_argument(
         "-p", "--portrait", action="store_true", 
         help="Usar orientación vertical (portrait) en lugar de apaisada (landscape)"
@@ -167,14 +170,23 @@ if __name__ == "__main__":
     print("\n---------------------------------------------------------------------\n")
 
     # Determinar si usar modo interactivo o argumentos de línea de comandos
-    if args.interactive or (not args.input and not args.output):
+    if args.interactive or (not args.input):
         # Modo interactivo
         input_directory = input(
             "Ingresa la ruta de la carpeta que contiene tus archivos HTML: "
         ).strip()
-        output_pdf_name = input(
-            "Ingresa el nombre para el archivo PDF de salida (ej. plan_completo.pdf): "
-        ).strip()
+        
+        # Sugerir un nombre de archivo por defecto en la misma carpeta
+        default_output_name = os.path.join(input_directory, "output.pdf")
+        output_prompt = f"Ingresa el nombre para el archivo PDF de salida [predeterminado: {default_output_name}]: "
+        output_pdf_name = input(output_prompt).strip()
+        
+        # Si no se proporciona un nombre, usar el predeterminado
+        if not output_pdf_name:
+            output_pdf_name = default_output_name
+        # Si solo se proporciona un nombre sin ruta, colocarlo en la carpeta de entrada
+        elif not os.path.isabs(output_pdf_name) and not os.path.dirname(output_pdf_name):
+            output_pdf_name = os.path.join(input_directory, output_pdf_name)
         
         # Preguntar por la orientación
         orientation_choice = input(
@@ -188,12 +200,19 @@ if __name__ == "__main__":
         if not args.input:
             print("Error: Se requiere especificar la carpeta de entrada con --input")
             sys.exit(1)
-        if not args.output:
-            print("Error: Se requiere especificar el archivo de salida con --output")
-            sys.exit(1)
 
         input_directory = args.input
-        output_pdf_name = args.output
+        
+        # Si no se especifica un archivo de salida, usar uno predeterminado en la misma carpeta
+        if not args.output:
+            output_pdf_name = os.path.join(input_directory, "output.pdf")
+            print(f"No se especificó archivo de salida. Usando: {output_pdf_name}")
+        else:
+            output_pdf_name = args.output
+            # Si solo se proporciona un nombre sin ruta, colocarlo en la carpeta de entrada
+            if not os.path.isabs(output_pdf_name) and not os.path.dirname(output_pdf_name):
+                output_pdf_name = os.path.join(input_directory, output_pdf_name)
+        
         # Usar la orientación de los argumentos de línea de comandos
         page_orientation = "portrait" if args.portrait else "landscape"
 
