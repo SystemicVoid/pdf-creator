@@ -50,8 +50,9 @@ def find_html_files(folder_path):
 def create_pdf_from_html_folder(input_folder, output_pdf_filename, orientation="landscape"):
     """
     Crea un único archivo PDF a partir de todos los archivos HTML encontrados en una carpeta.
-    El contenido de cada archivo HTML se ajusta para caber perfectamente en una página A4.
-    Cada archivo HTML se convierte en una página independiente en el PDF final.
+    Preserva el contenido completo de cada archivo HTML, permitiendo que fluya naturalmente a través
+    de múltiples páginas si es necesario, mientras asegura que las tablas y otros elementos
+    no se dividan entre páginas.
 
     Args:
         input_folder (str): La ruta a la carpeta que contiene los archivos HTML.
@@ -69,76 +70,94 @@ def create_pdf_from_html_folder(input_folder, output_pdf_filename, orientation="
 
     print(f"Archivos HTML encontrados para procesar (en orden): {html_files}")
     
-    # Usar estilo de página según la orientación (para crear el PDF final)
-    page_style = PORTRAIT_PAGE_STYLE if orientation == "portrait" else LANDSCAPE_PAGE_STYLE
-    
     # Crear directorio temporal para PDFs individuales
     temp_dir = tempfile.mkdtemp(prefix="pdf_creator_")
     temp_pdf_files = []
     
-    # Lista para almacenar documentos renderizados
-    all_documents = []
+    # Lista para almacenar documentos HTML
+    all_html_docs = []
 
     try:
         for i, html_file in enumerate(html_files):
             print(f"Procesando archivo: {html_file}...")
             
-            # Calcular el factor de escala adecuado para ajustar el contenido
-            # Paso 1: Renderizar con estilo de medición para obtener tamaños reales
-            html_doc = HTML(filename=html_file, base_url=input_folder)
-            doc_for_measure = html_doc.render(stylesheets=[MEASURE_STYLE])
+            # Crear un archivo PDF temporal para este archivo HTML
+            temp_pdf = os.path.join(temp_dir, f"doc_{i}.pdf")
+            temp_pdf_files.append(temp_pdf)
             
-            # Obtener dimensiones del contenido
-            if doc_for_measure.pages:
-                content_width = doc_for_measure.pages[0].width
-                content_height = doc_for_measure.pages[0].height
-            else:
-                # Si no hay páginas, usar valores predeterminados
-                content_width = 800
-                content_height = 600
-            
-            # Paso 3: Calcular las dimensiones objetivo (A4 en puntos)
-            margin_mm = 10  # 1cm = 10mm
-            
-            if orientation == "landscape":
-                target_width = (297 - 2 * margin_mm) * 2.83465  # Ancho A4 menos márgenes
-                target_height = (210 - 2 * margin_mm) * 2.83465  # Alto A4 menos márgenes
-            else:
-                target_width = (210 - 2 * margin_mm) * 2.83465  # Ancho A4 menos márgenes
-                target_height = (297 - 2 * margin_mm) * 2.83465  # Alto A4 menos márgenes
-            
-            # Calcular el factor de escala
-            scale_factor = min(target_width / content_width, target_height / content_height)
-            scale_factor = max(scale_factor, 0.4)  # Evitar que el texto sea demasiado pequeño
-            
-            # Crear una hoja de estilo de ajuste personalizada para este documento
-            fit_style = CSS(string=f"""
+            # Crear un estilo CSS personalizado que preserve el contenido completo
+            # y asegure que las tablas y otros elementos no se dividan entre páginas
+            preserve_content_style = CSS(string=f"""
                 @page {{
                     size: A4 {orientation};
-                    margin: {margin_mm}mm;
+                    margin: 1cm;
                 }}
                 
-                html, body {{
-                    width: 100%;
-                    height: 100%;
-                    margin: 0;
-                    padding: 0;
-                    overflow: hidden;
+                /* Evitar que las tablas se dividan entre páginas */
+                table {{
+                    page-break-inside: avoid;
                 }}
                 
-                body {{
-                    transform: scale({scale_factor:.6f});
-                    transform-origin: top left;
-                    width: {content_width}px;
-                    height: {content_height}px;
+                /* Evitar que los encabezados se separen del contenido siguiente */
+                h1, h2, h3, h4, h5, h6 {{
+                    page-break-after: avoid;
+                }}
+                
+                /* Asegurar que las imágenes no se dividan */
+                img {{
+                    page-break-inside: avoid;
+                }}
+                
+                /* Ajustar el ancho de las tablas para que quepan en la página */
+                table {{
+                    width: 100% !important;
+                    max-width: 100%;
+                    table-layout: fixed;
+                }}
+                
+                /* Ajustar el tamaño de las celdas para mejor legibilidad */
+                td, th {{
+                    word-wrap: break-word;
+                    overflow-wrap: break-word;
                 }}
             """)
             
-            # Renderizar con la hoja de estilo personalizada
-            document = html_doc.render(stylesheets=[fit_style])
-            all_documents.append(document)
+            # Convertir el HTML a PDF preservando todo el contenido
+            html_doc = HTML(filename=html_file, base_url=input_folder)
+            html_doc.write_pdf(temp_pdf, stylesheets=[preserve_content_style])
             
-            print(f"'{html_file}' procesado y ajustado con factor de escala: {scale_factor:.2f}")
+            print(f"'{html_file}' procesado y guardado temporalmente como '{temp_pdf}'.")
+            
+            # Guardar el documento HTML para combinar posteriormente
+            all_html_docs.append(html_doc)
+        
+        # Renderizar todos los documentos HTML con el estilo de preservación de contenido
+        all_documents = []
+        for i, html_doc in enumerate(all_html_docs):
+            # Seleccionar el estilo de página según la orientación
+            page_style = PORTRAIT_PAGE_STYLE if orientation == "portrait" else LANDSCAPE_PAGE_STYLE
+            
+            # Crear un estilo CSS personalizado para este documento
+            preserve_content_style = CSS(string=f"""
+                @page {{
+                    size: A4 {orientation};
+                    margin: 1cm;
+                }}
+                
+                /* Evitar que las tablas se dividan entre páginas */
+                table {{
+                    page-break-inside: avoid;
+                }}
+                
+                /* Evitar que los encabezados se separen del contenido siguiente */
+                h1, h2, h3, h4, h5, h6 {{
+                    page-break-after: avoid;
+                }}
+            """)
+            
+            # Renderizar el documento con el estilo de preservación
+            document = html_doc.render(stylesheets=[preserve_content_style])
+            all_documents.append(document)
         
         # Combinar todas las páginas en un solo documento
         if all_documents:
