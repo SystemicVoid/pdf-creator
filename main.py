@@ -16,6 +16,9 @@ from weasyprint.document import (
 LANDSCAPE_PAGE_STYLE = CSS(string="@page { size: A4 landscape; margin: 1cm; }")
 PORTRAIT_PAGE_STYLE = CSS(string="@page { size: A4 portrait; margin: 1cm; }")
 
+# Hoja de estilo mínima para medir el tamaño natural del contenido
+MEASURE_STYLE = CSS(string="@page { size: auto; margin: 0; }")
+
 # Por defecto usamos apaisado (landscape)
 DEFAULT_PAGE_STYLE = LANDSCAPE_PAGE_STYLE
 
@@ -41,20 +44,22 @@ def find_html_files(folder_path):
     return html_files
 
 
+# Esta función se ha incorporado directamente en create_pdf_from_html_folder para simplificar el código
+
+
 def create_pdf_from_html_folder(input_folder, output_pdf_filename, orientation="landscape"):
     """
     Crea un único archivo PDF a partir de todos los archivos HTML encontrados en una carpeta.
-    El contenido de cada archivo HTML se añade secuencialmente al PDF.
-    Se aplica un estilo de página A4 apaisado por defecto.
+    El contenido de cada archivo HTML se ajusta para caber perfectamente en una página A4.
+    Cada archivo HTML se convierte en una página independiente en el PDF final.
 
     Args:
         input_folder (str): La ruta a la carpeta que contiene los archivos HTML.
         output_pdf_filename (str): El nombre del archivo PDF de salida.
+        orientation (str): Orientación de la página, "landscape" (apaisado) o "portrait" (vertical).
     """
     if not os.path.isdir(input_folder):
-        print(
-            f"Error: La carpeta de entrada '{input_folder}' no existe o no es un directorio."
-        )
+        print(f"Error: La carpeta de entrada '{input_folder}' no existe o no es un directorio.")
         return
 
     html_files = find_html_files(input_folder)
@@ -63,69 +68,93 @@ def create_pdf_from_html_folder(input_folder, output_pdf_filename, orientation="
         return
 
     print(f"Archivos HTML encontrados para procesar (en orden): {html_files}")
-
-    # Enfoque alternativo: crear un PDF por cada HTML y luego combinarlos
-    # usando una herramienta externa o biblioteca como PyPDF2
-    temp_pdf_files = []
-
-    # Seleccionar el estilo de página según la orientación
+    
+    # Usar estilo de página según la orientación (para crear el PDF final)
     page_style = PORTRAIT_PAGE_STYLE if orientation == "portrait" else LANDSCAPE_PAGE_STYLE
     
+    # Crear directorio temporal para PDFs individuales
+    temp_dir = tempfile.mkdtemp(prefix="pdf_creator_")
+    temp_pdf_files = []
+    
+    # Lista para almacenar documentos renderizados
+    all_documents = []
+
     try:
-        # Crear PDF individuales para cada archivo HTML
-        for html_file_path in html_files:
-            print(f"Procesando archivo: {html_file_path}...")
-            try:
-                # Crear un nombre de archivo temporal para este PDF
-                temp_pdf_path = f"{os.path.splitext(html_file_path)[0]}_temp.pdf"
-                temp_pdf_files.append(temp_pdf_path)
-
-                # Renderizar el HTML a PDF
-                doc_html_source = HTML(filename=html_file_path, base_url=input_folder)
-                doc_html_source.write_pdf(
-                    temp_pdf_path, stylesheets=[page_style]
-                )
-                print(
-                    f"'{html_file_path}' procesado y guardado temporalmente como '{temp_pdf_path}'."
-                )
-
-            except Exception as e:
-                print(f"Error procesando el archivo '{html_file_path}': {e}")
-                print("Saltando este archivo y continuando con el siguiente.")
-                continue
-
-        if not temp_pdf_files:
-            print("No se pudieron crear PDFs temporales. No se generará el PDF final.")
-            return
-
-        # Ahora combinamos todos los PDFs en uno solo usando el método de WeasyPrint
-        print(f"Ensamblando el PDF final: {output_pdf_filename}...")
-
-        # Usamos el primer PDF como base y añadimos el resto como páginas adicionales
-        all_html_docs = []
-        for html_file in html_files:
+        for i, html_file in enumerate(html_files):
+            print(f"Procesando archivo: {html_file}...")
+            
+            # Calcular el factor de escala adecuado para ajustar el contenido
+            # Paso 1: Renderizar con estilo de medición para obtener tamaños reales
             html_doc = HTML(filename=html_file, base_url=input_folder)
-            all_html_docs.append(html_doc)
-
-        # Renderizar todos los documentos HTML
-        all_rendered = [
-            doc.render(stylesheets=[page_style]) for doc in all_html_docs
-        ]
-
-        # Extraer todas las páginas
-        all_pages = []
-        for doc in all_rendered:
-            all_pages.extend(doc.pages)
-
-        # Crear un nuevo documento con todas las páginas
-        if all_pages:
-            # Usar el primer documento renderizado como base
-            all_rendered[0].copy(all_pages).write_pdf(output_pdf_filename)
-            print(
-                f"¡PDF '{output_pdf_filename}' creado exitosamente con {len(all_pages)} página(s)!"
-            )
+            doc_for_measure = html_doc.render(stylesheets=[MEASURE_STYLE])
+            
+            # Obtener dimensiones del contenido
+            if doc_for_measure.pages:
+                content_width = doc_for_measure.pages[0].width
+                content_height = doc_for_measure.pages[0].height
+            else:
+                # Si no hay páginas, usar valores predeterminados
+                content_width = 800
+                content_height = 600
+            
+            # Paso 3: Calcular las dimensiones objetivo (A4 en puntos)
+            margin_mm = 10  # 1cm = 10mm
+            
+            if orientation == "landscape":
+                target_width = (297 - 2 * margin_mm) * 2.83465  # Ancho A4 menos márgenes
+                target_height = (210 - 2 * margin_mm) * 2.83465  # Alto A4 menos márgenes
+            else:
+                target_width = (210 - 2 * margin_mm) * 2.83465  # Ancho A4 menos márgenes
+                target_height = (297 - 2 * margin_mm) * 2.83465  # Alto A4 menos márgenes
+            
+            # Calcular el factor de escala
+            scale_factor = min(target_width / content_width, target_height / content_height)
+            scale_factor = max(scale_factor, 0.4)  # Evitar que el texto sea demasiado pequeño
+            
+            # Crear una hoja de estilo de ajuste personalizada para este documento
+            fit_style = CSS(string=f"""
+                @page {{
+                    size: A4 {orientation};
+                    margin: {margin_mm}mm;
+                }}
+                
+                html, body {{
+                    width: 100%;
+                    height: 100%;
+                    margin: 0;
+                    padding: 0;
+                    overflow: hidden;
+                }}
+                
+                body {{
+                    transform: scale({scale_factor:.6f});
+                    transform-origin: top left;
+                    width: {content_width}px;
+                    height: {content_height}px;
+                }}
+            """)
+            
+            # Renderizar con la hoja de estilo personalizada
+            document = html_doc.render(stylesheets=[fit_style])
+            all_documents.append(document)
+            
+            print(f"'{html_file}' procesado y ajustado con factor de escala: {scale_factor:.2f}")
+        
+        # Combinar todas las páginas en un solo documento
+        if all_documents:
+            all_pages = []
+            for doc in all_documents:
+                all_pages.extend(doc.pages)
+            
+            if all_pages:
+                # Usar el primer documento como base
+                print(f"Ensamblando el PDF final: {output_pdf_filename}...")
+                all_documents[0].copy(all_pages).write_pdf(output_pdf_filename)
+                print(f"\u00a1PDF '{output_pdf_filename}' creado exitosamente con {len(all_pages)} página(s)!")
+            else:
+                print("No hay páginas para escribir en el PDF.")
         else:
-            print("No hay páginas para escribir en el PDF.")
+            print("No se pudieron procesar documentos HTML.")
 
     except Exception as e:
         print(f"Error al escribir el archivo PDF final '{output_pdf_filename}': {e}")
@@ -136,9 +165,13 @@ def create_pdf_from_html_folder(input_folder, output_pdf_filename, orientation="
                 try:
                     os.remove(temp_file)
                 except Exception as e:
-                    print(
-                        f"Advertencia: No se pudo eliminar el archivo temporal '{temp_file}': {e}"
-                    )
+                    print(f"Advertencia: No se pudo eliminar el archivo temporal '{temp_file}': {e}")
+        
+        # Eliminar el directorio temporal
+        try:
+            os.rmdir(temp_dir)
+        except Exception as e:
+            print(f"Advertencia: No se pudo eliminar el directorio temporal '{temp_dir}': {e}")
 
 
 def load_history():
