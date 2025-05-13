@@ -1,10 +1,10 @@
 # PDF Creator
 
-Una herramienta para combinar múltiples archivos HTML en un único PDF con formato consistente.
+Una herramienta para combinar múltiples archivos HTML en un único PDF con formato consistente y optimizado.
 
 ## Descripción
 
-PDF Creator es una utilidad de línea de comandos que toma todos los archivos HTML de una carpeta especificada, los ordena alfabéticamente y los combina en un único archivo PDF. Cada archivo HTML se renderiza con un formato consistente, permitiendo elegir entre orientación vertical (portrait) u horizontal (landscape).
+PDF Creator es una utilidad de línea de comandos que toma todos los archivos HTML de una carpeta especificada, los ordena correctamente y los combina en un único archivo PDF. Cada archivo HTML se renderiza con un formato consistente, permitiendo elegir entre orientación vertical (portrait) u horizontal (landscape) y preservando la integridad del contenido.
 
 Esta herramienta es ideal para:
 - Crear manuales o documentación a partir de páginas HTML
@@ -15,8 +15,11 @@ Esta herramienta es ideal para:
 ## Características
 
 - Combina múltiples archivos HTML en un único PDF
-- Ordena los archivos alfabéticamente para un procesamiento consistente
+- Ordenamiento natural de archivos (ej: sesion1.html, sesion2.html, sesion10.html)
+- Preservación del contenido a través de múltiples páginas
+- Evita división de tablas, imágenes y encabezados entre páginas
 - Permite elegir entre orientación vertical (portrait) u horizontal (landscape)
+- Recuerda las últimas 3 carpetas utilizadas
 - Funciona en modo interactivo o con argumentos de línea de comandos
 - Limpia automáticamente los archivos temporales
 - Proporciona mensajes claros sobre el progreso y los errores
@@ -26,6 +29,7 @@ Esta herramienta es ideal para:
 - Python 3.12 o superior
 - [uv](https://github.com/astral-sh/uv) - Gestor de paquetes y entornos virtuales
 - Dependencias del sistema para WeasyPrint (ver sección de instalación)
+- Espacio para archivos de configuración (~/.config/pdf-creator/)
 
 ## Instalación
 
@@ -62,7 +66,7 @@ uv run main.py --interactive
 ```
 
 Esto te guiará a través de una serie de preguntas para especificar:
-- La carpeta que contiene tus archivos HTML
+- La carpeta que contiene tus archivos HTML (mostrando las últimas 3 carpetas utilizadas)
 - El nombre del archivo PDF de salida
 - La orientación de página (vertical u horizontal)
 
@@ -91,6 +95,30 @@ uv run main.py --input "./mis_archivos_html" --output documento.pdf --portrait
 uv run main.py --interactive
 ```
 
+## Detalles técnicos
+
+### Ordenamiento natural
+
+A diferencia de la ordenación alfabética estándar, el ordenamiento natural maneja correctamente archivos con componentes numéricos:
+
+- Ordenación estándar: `sesion1.html, sesion10.html, sesion2.html...`
+- Ordenación natural: `sesion1.html, sesion2.html, ..., sesion10.html...`
+
+Esto garantiza que los documentos aparezcan en el PDF en el orden lógico esperado.
+
+### Preservación de contenido
+
+La herramienta utiliza estilos CSS avanzados para:
+
+- Evitar que las tablas se dividan entre páginas
+- Mantener los encabezados con su contenido asociado
+- Evitar la división de imágenes
+- Optimizar el diseño de tablas para mayor legibilidad
+
+### Historial de rutas
+
+Las últimas tres carpetas utilizadas se guardan en `~/.config/pdf-creator/history.json`.
+
 ## Desarrollo
 
 Para contribuir al desarrollo:
@@ -102,6 +130,15 @@ uv add --dev black
 # Formatear código
 uv run -m black .
 ```
+
+### Estructura del código
+
+El código está organizado en módulos funcionales:
+
+- Funciones de utilidad (ordenamiento natural, búsqueda de archivos)
+- Gestión del historial de rutas
+- Procesamiento de PDF y renderizado
+- Interfaz de línea de comandos
 
 ## Licencia
 
