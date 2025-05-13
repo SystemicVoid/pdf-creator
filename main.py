@@ -1,246 +1,292 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+PDF Creator - Herramienta para combinar archivos HTML en un PDF
 
+Este script toma múltiples archivos HTML de una carpeta, los ordena
+y los combina en un único documento PDF, respetando el contenido y formato.
+Funciona tanto de forma interactiva como con argumentos de línea de comandos.
+"""
+
+# Imports estándar
 import os
+import sys
 import glob
-import tempfile
 import json
-from weasyprint import HTML, CSS
-from weasyprint.document import (
-    Document,
-)  # Para combinar páginas de múltiples fuentes HTML
+import re
+import tempfile
+import argparse
+from pathlib import Path
 
-# --- Hojas de Estilos CSS para la Página ---
-# Estas hojas de estilos se aplicarán a cada documento HTML antes de renderizar sus páginas.
-# Definen el tamaño de página como A4 (apaisado o vertical) y establecen márgenes.
-LANDSCAPE_PAGE_STYLE = CSS(string="@page { size: A4 landscape; margin: 1cm; }")
-PORTRAIT_PAGE_STYLE = CSS(string="@page { size: A4 portrait; margin: 1cm; }")
+# Verificar dependencias antes de continuar
+try:
+    # Imports de terceros
+    from weasyprint import HTML, CSS
+    from weasyprint.document import Document
+except ImportError:
+    print("\033[91mError: Dependencias faltantes.\033[0m")
+    print("Este script requiere WeasyPrint para funcionar. Por favor, asegúrate de:")
+    print("  1. Estar utilizando el entorno virtual correcto")
+    print("  2. Haber instalado las dependencias con: pip install -r requirements.txt")
+    print("\nSi estás fuera del entorno virtual, actívalo con:")
+    print("  source venv/bin/activate  # En Linux/Mac")
+    print("  o")
+    print("  .\venv\Scripts\activate    # En Windows")
+    sys.exit(1)
 
-# Hoja de estilo mínima para medir el tamaño natural del contenido
-MEASURE_STYLE = CSS(string="@page { size: auto; margin: 0; }")
+# Constantes
+CONFIG_DIR = os.path.expanduser("~/.config/pdf-creator")
+HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
 
-# Por defecto usamos apaisado (landscape)
-DEFAULT_PAGE_STYLE = LANDSCAPE_PAGE_STYLE
+# --- Estilos CSS ---
+STYLES = {
+    "landscape": CSS(string="@page { size: A4 landscape; margin: 1cm; }"),
+    "portrait": CSS(string="@page { size: A4 portrait; margin: 1cm; }"),
+    "measure": CSS(string="@page { size: auto; margin: 0; }"),
+}
 
 
+# --- Funciones de utilidad ---
 def natural_sort_key(s):
     """
-    Función auxiliar para ordenar cadenas que contienen números de forma natural.
-    Por ejemplo: ['sesion1.html', 'sesion2.html', 'sesion10.html'] en lugar de
-    ['sesion1.html', 'sesion10.html', 'sesion2.html'].
+    Ordena cadenas que contienen números de forma natural.
+    
+    Args:
+        s (str): Cadena a ordenar
+        
+    Returns:
+        list: Lista de elementos para comparación de orden natural
+        
+    Ejemplo:
+        ['sesion1.html', 'sesion2.html', 'sesion10.html'] en lugar de
+        ['sesion1.html', 'sesion10.html', 'sesion2.html']
     """
-    import re
-    # Dividir la cadena en segmentos numéricos y no numéricos
     return [int(text) if text.isdigit() else text.lower()
             for text in re.split('([0-9]+)', s)]
 
 
+# --- Funciones principales ---
 def find_html_files(folder_path):
     """
-    Encuentra todos los archivos .html en la carpeta especificada.
-    Los archivos se devuelven ordenados numéricamente para un procesamiento consistente
-    (por ejemplo, sesion1.html, sesion2.html, ..., sesion10.html, en lugar de
-    ordenarlos alfabéticamente, lo que pondría sesion10.html antes que sesion2.html).
+    Encuentra y ordena archivos HTML en la carpeta especificada usando orden numérico natural.
+    
+    Esto asegura que los archivos se ordenen correctamente (ej: sesion1.html, 
+    sesion2.html, ..., sesion10.html) en lugar de usar orden alfabético estándar.
 
     Args:
-        folder_path (str): La ruta a la carpeta que contiene los archivos HTML.
+        folder_path (str): Ruta a la carpeta con archivos HTML
 
     Returns:
-        list: Una lista de rutas a los archivos HTML encontrados, o una lista vacía.
+        list: Lista ordenada de rutas a archivos HTML o lista vacía
     """
     search_path = os.path.join(folder_path, "*.html")
-    # Usar ordenamiento natural para manejar correctamente archivos con números
     html_files = sorted(glob.glob(search_path), key=natural_sort_key)
 
     if not html_files:
-        print(
-            f"Advertencia: No se encontraron archivos .html en la carpeta: {folder_path}"
-        )
+        print(f"Advertencia: No se encontraron archivos HTML en: {folder_path}")
+        
     return html_files
 
 
 # Esta función se ha incorporado directamente en create_pdf_from_html_folder para simplificar el código
 
 
-def create_pdf_from_html_folder(
-    input_folder, output_pdf_filename, orientation="landscape"
-):
+def create_pdf_from_html_folder(input_folder, output_pdf_filename, orientation="landscape"):
     """
-    Crea un único archivo PDF a partir de todos los archivos HTML encontrados en una carpeta.
-    Preserva el contenido completo de cada archivo HTML, permitiendo que fluya naturalmente a través
-    de múltiples páginas si es necesario, mientras asegura que las tablas y otros elementos
-    no se dividan entre páginas.
+    Crea un PDF a partir de todos los archivos HTML encontrados en una carpeta.
+    
+    Preserva el contenido completo de cada archivo HTML, permitiendo que fluya 
+    naturalmente a través de múltiples páginas si es necesario, mientras asegura 
+    que las tablas y otros elementos no se dividan entre páginas.
 
     Args:
-        input_folder (str): La ruta a la carpeta que contiene los archivos HTML.
-        output_pdf_filename (str): El nombre del archivo PDF de salida.
-        orientation (str): Orientación de la página, "landscape" (apaisado) o "portrait" (vertical).
+        input_folder (str): Ruta a la carpeta con archivos HTML
+        output_pdf_filename (str): Nombre del archivo PDF de salida
+        orientation (str): "landscape" (apaisado) o "portrait" (vertical)
+        
+    Returns:
+        bool: True si el proceso fue exitoso, False en caso contrario
     """
+    # Validar el directorio de entrada
     if not os.path.isdir(input_folder):
-        print(
-            f"Error: La carpeta de entrada '{input_folder}' no existe o no es un directorio."
-        )
-        return
+        print(f"Error: La carpeta '{input_folder}' no existe o no es un directorio.")
+        return False
 
+    # Encontrar archivos HTML
     html_files = find_html_files(input_folder)
     if not html_files:
         print("No hay archivos HTML para procesar. Saliendo.")
-        return
+        return False
 
-    print(f"Archivos HTML encontrados para procesar (en orden): {html_files}")
+    print(f"Archivos HTML encontrados (en orden): {len(html_files)}")
 
-    # Crear directorio temporal para PDFs individuales
+    # Crear directorio temporal para los archivos intermedios
     temp_dir = tempfile.mkdtemp(prefix="pdf_creator_")
     temp_pdf_files = []
-
-    # Lista para almacenar documentos HTML
     all_html_docs = []
 
     try:
+        # Definir estilos CSS para preservar el contenido
+        preserve_content_style = get_content_preservation_css(orientation)
+        
+        # Procesar cada archivo HTML
         for i, html_file in enumerate(html_files):
             print(f"Procesando archivo: {html_file}...")
-
-            # Crear un archivo PDF temporal para este archivo HTML
+            
+            # Crear y guardar PDF temporal
             temp_pdf = os.path.join(temp_dir, f"doc_{i}.pdf")
             temp_pdf_files.append(temp_pdf)
-
-            # Crear un estilo CSS personalizado que preserve el contenido completo
-            # y asegure que las tablas y otros elementos no se dividan entre páginas
-            preserve_content_style = CSS(
-                string=f"""
-                @page {{
-                    size: A4 {orientation};
-                    margin: 1cm;
-                }}
-                
-                /* Evitar que las tablas se dividan entre páginas */
-                table {{
-                    page-break-inside: avoid;
-                }}
-                
-                /* Evitar que los encabezados se separen del contenido siguiente */
-                h1, h2, h3, h4, h5, h6 {{
-                    page-break-after: avoid;
-                }}
-                
-                /* Asegurar que las imágenes no se dividan */
-                img {{
-                    page-break-inside: avoid;
-                }}
-                
-                /* Ajustar el ancho de las tablas para que quepan en la página */
-                table {{
-                    width: 100% !important;
-                    max-width: 100%;
-                    table-layout: fixed;
-                }}
-                
-                /* Ajustar el tamaño de las celdas para mejor legibilidad */
-                td, th {{
-                    word-wrap: break-word;
-                    overflow-wrap: break-word;
-                }}
-            """
-            )
-
-            # Convertir el HTML a PDF preservando todo el contenido
+            
+            # Convertir HTML a PDF preservando el contenido
             html_doc = HTML(filename=html_file, base_url=input_folder)
             html_doc.write_pdf(temp_pdf, stylesheets=[preserve_content_style])
-
-            print(
-                f"'{html_file}' procesado y guardado temporalmente como '{temp_pdf}'."
-            )
-
-            # Guardar el documento HTML para combinar posteriormente
+            
+            print(f"  ✓ Procesado como '{os.path.basename(temp_pdf)}'")
             all_html_docs.append(html_doc)
 
-        # Renderizar todos los documentos HTML con el estilo de preservación de contenido
-        all_documents = []
-        for i, html_doc in enumerate(all_html_docs):
-            # Seleccionar el estilo de página según la orientación
-            page_style = (
-                PORTRAIT_PAGE_STYLE
-                if orientation == "portrait"
-                else LANDSCAPE_PAGE_STYLE
-            )
-
-            # Crear un estilo CSS personalizado para este documento
-            preserve_content_style = CSS(
-                string=f"""
-                @page {{
-                    size: A4 {orientation};
-                    margin: 1cm;
-                }}
-                
-                /* Evitar que las tablas se dividan entre páginas */
-                table {{
-                    page-break-inside: avoid;
-                }}
-                
-                /* Evitar que los encabezados se separen del contenido siguiente */
-                h1, h2, h3, h4, h5, h6 {{
-                    page-break-after: avoid;
-                }}
-            """
-            )
-
-            # Renderizar el documento con el estilo de preservación
-            document = html_doc.render(stylesheets=[preserve_content_style])
-            all_documents.append(document)
-
-        # Combinar todas las páginas en un solo documento
-        if all_documents:
-            all_pages = []
-            for doc in all_documents:
-                all_pages.extend(doc.pages)
-
-            if all_pages:
-                # Usar el primer documento como base
-                print(f"Ensamblando el PDF final: {output_pdf_filename}...")
-                all_documents[0].copy(all_pages).write_pdf(output_pdf_filename)
-                print(
-                    f"\u00a1PDF '{output_pdf_filename}' creado exitosamente con {len(all_pages)} página(s)!"
-                )
-            else:
-                print("No hay páginas para escribir en el PDF.")
-        else:
-            print("No se pudieron procesar documentos HTML.")
-
+        # Renderizar documentos y combinar páginas
+        return combine_documents_to_pdf(
+            all_html_docs, output_pdf_filename, orientation
+        )
     except Exception as e:
-        print(f"Error al escribir el archivo PDF final '{output_pdf_filename}': {e}")
+        print(f"Error al crear el PDF: {e}")
+        return False
     finally:
         # Limpiar archivos temporales
-        for temp_file in temp_pdf_files:
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception as e:
-                    print(
-                        f"Advertencia: No se pudo eliminar el archivo temporal '{temp_file}': {e}"
-                    )
+        cleanup_temp_files(temp_pdf_files, temp_dir)
 
-        # Eliminar el directorio temporal
-        try:
+
+def get_content_preservation_css(orientation):
+    """
+    Crea un estilo CSS que preserva el contenido y evita que las tablas 
+    y otros elementos se dividan entre páginas.
+    
+    Args:
+        orientation (str): Orientación de la página
+        
+    Returns:
+        CSS: Objeto CSS con los estilos necesarios
+    """
+    return CSS(string=f"""
+        @page {{
+            size: A4 {orientation};
+            margin: 1cm;
+        }}
+        
+        /* Evitar que las tablas se dividan entre páginas */
+        table {{
+            page-break-inside: avoid;
+        }}
+        
+        /* Evitar que los encabezados se separen del contenido */
+        h1, h2, h3, h4, h5, h6 {{
+            page-break-after: avoid;
+        }}
+        
+        /* Asegurar que las imágenes no se dividan */
+        img {{
+            page-break-inside: avoid;
+        }}
+        
+        /* Ajustar el ancho de las tablas para la página */
+        table {{
+            width: 100% !important;
+            max-width: 100%;
+            table-layout: fixed;
+        }}
+        
+        /* Ajustar celdas para mejor legibilidad */
+        td, th {{
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }}
+    """)
+
+
+def combine_documents_to_pdf(html_docs, output_filename, orientation):
+    """
+    Combina varios documentos HTML en un único PDF.
+    
+    Args:
+        html_docs (list): Lista de objetos HTML
+        output_filename (str): Ruta al archivo PDF de salida
+        orientation (str): Orientación de la página
+        
+    Returns:
+        bool: True si el proceso fue exitoso, False en caso contrario
+    """
+    # Seleccionar estilo según orientación
+    page_style = STYLES[orientation]
+    
+    # Renderizar documentos
+    rendered_docs = []
+    for html_doc in html_docs:
+        # Usar el mismo estilo de preservación para todos los documentos
+        preserve_style = get_content_preservation_css(orientation)
+        rendered_doc = html_doc.render(stylesheets=[preserve_style])
+        rendered_docs.append(rendered_doc)
+    
+    # Si no hay documentos, salir
+    if not rendered_docs:
+        print("No se pudieron procesar documentos HTML.")
+        return False
+    
+    # Extraer todas las páginas
+    all_pages = []
+    for doc in rendered_docs:
+        all_pages.extend(doc.pages)
+    
+    if not all_pages:
+        print("No hay páginas para escribir en el PDF.")
+        return False
+    
+    # Crear PDF final
+    print(f"Ensamblando el PDF final: {output_filename}...")
+    rendered_docs[0].copy(all_pages).write_pdf(output_filename)
+    print(f"\u00a1PDF '{output_filename}' creado exitosamente con {len(all_pages)} página(s)!")
+    return True
+
+
+def cleanup_temp_files(temp_files, temp_dir):
+    """
+    Limpia los archivos temporales y el directorio usado durante el proceso.
+    
+    Args:
+        temp_files (list): Lista de rutas a archivos temporales
+        temp_dir (str): Ruta al directorio temporal
+    """
+    # Eliminar archivos temporales
+    for temp_file in temp_files:
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception as e:
+                print(f"Advertencia: No se pudo eliminar el archivo temporal '{temp_file}': {e}")
+
+    # Eliminar directorio temporal
+    try:
+        if os.path.exists(temp_dir):
             os.rmdir(temp_dir)
-        except Exception as e:
-            print(
-                f"Advertencia: No se pudo eliminar el directorio temporal '{temp_dir}': {e}"
-            )
+    except Exception as e:
+        print(f"Advertencia: No se pudo eliminar el directorio temporal '{temp_dir}': {e}")
 
 
+# --- Funciones de gestión del historial ---
 def load_history():
-    """Cargar el historial de rutas usadas anteriormente"""
-    config_dir = os.path.expanduser("~/.config/pdf-creator")
-    history_file = os.path.join(config_dir, "history.json")
-
+    """
+    Carga el historial de rutas usadas previamente.
+    
+    Returns:
+        dict: Diccionario con el historial o estructura vacía si no hay historial
+    """
     # Crear directorio de configuración si no existe
-    if not os.path.exists(config_dir):
-        os.makedirs(config_dir, exist_ok=True)
+    if not os.path.exists(CONFIG_DIR):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
 
     # Cargar historial existente o crear uno nuevo
-    if os.path.exists(history_file):
+    if os.path.exists(HISTORY_FILE):
         try:
-            with open(history_file, "r") as f:
+            with open(HISTORY_FILE, "r") as f:
                 return json.load(f)
         except Exception as e:
             print(f"Advertencia: No se pudo cargar el historial: {e}")
@@ -250,19 +296,26 @@ def load_history():
 
 
 def save_history(history):
-    """Guardar el historial de rutas usadas"""
-    config_dir = os.path.expanduser("~/.config/pdf-creator")
-    history_file = os.path.join(config_dir, "history.json")
-
+    """
+    Guarda el historial de rutas usadas.
+    
+    Args:
+        history (dict): Diccionario con el historial a guardar
+    """
     try:
-        with open(history_file, "w") as f:
+        with open(HISTORY_FILE, "w") as f:
             json.dump(history, f, indent=2)
     except Exception as e:
         print(f"Advertencia: No se pudo guardar el historial: {e}")
 
 
 def update_input_history(path):
-    """Actualizar el historial de rutas de entrada"""
+    """
+    Actualiza el historial con una nueva ruta, manteniéndola al principio.
+    
+    Args:
+        path (str): Ruta a añadir al historial
+    """
     history = load_history()
 
     # Eliminar la ruta si ya existe en el historial
@@ -280,20 +333,27 @@ def update_input_history(path):
 
 
 def get_input_directory_with_history():
-    """Solicitar la ruta de entrada con sugerencias del historial"""
+    """
+    Solicita al usuario la ruta de entrada mostrando sugerencias del historial.
+    
+    Returns:
+        str: Ruta seleccionada o ingresada por el usuario
+        
+    Raises:
+        SystemExit: Si ocurre un error que impide continuar
+    """
     try:
         history = load_history()
         input_paths = history.get("input_paths", [])
 
         if input_paths:
+            # Mostrar historial de rutas recientes
             print("Rutas usadas recientemente:")
             for i, path in enumerate(input_paths, 1):
                 print(f"  {i}. {path}")
 
             try:
-                choice = input(
-                    "\nSelecciona una ruta (1-3) o ingresa una nueva ruta: "
-                ).strip()
+                choice = input("\nSelecciona una ruta (1-3) o ingresa una nueva ruta: ").strip()
 
                 # Verificar si se seleccionó una ruta del historial
                 if choice.isdigit() and 1 <= int(choice) <= len(input_paths):
@@ -302,20 +362,15 @@ def get_input_directory_with_history():
                     # Si no es un número válido, tratar como una nueva ruta
                     return choice
             except EOFError:
-                # Si hay un error EOF, usar la primera ruta del historial
+                # En modo no interactivo, usar la primera ruta del historial
                 print(f"\nUsando la ruta más reciente: {input_paths[0]}")
                 return input_paths[0]
         else:
-            # Si no hay historial, simplemente solicitar la ruta
+            # Sin historial, solicitar la ruta
             try:
-                return input(
-                    "Ingresa la ruta de la carpeta que contiene tus archivos HTML: "
-                ).strip()
+                return input("Ingresa la ruta de la carpeta que contiene tus archivos HTML: ").strip()
             except EOFError:
-                # Si hay un error EOF y no hay historial, usar una ruta predeterminada
-                print(
-                    "\nError: No se pudo leer la entrada. Por favor, especifica la ruta con --input."
-                )
+                print("\nError: No se pudo leer la entrada. Por favor, especifica la ruta con --input.")
                 sys.exit(1)
     except Exception as e:
         print(f"Error al obtener el directorio de entrada: {e}")
@@ -323,131 +378,143 @@ def get_input_directory_with_history():
         sys.exit(1)
 
 
-if __name__ == "__main__":
-    import sys
-    import argparse
-
-    # Configurar el parser de argumentos de línea de comandos
+def parse_args():
+    """
+    Configura y procesa los argumentos de línea de comandos.
+    
+    Returns:
+        argparse.Namespace: Objeto con los argumentos procesados
+    """
     parser = argparse.ArgumentParser(
         description="Creador de PDF a partir de Múltiples Archivos HTML"
     )
     parser.add_argument(
-        "-i", "--input", help="Ruta de la carpeta que contiene los archivos HTML"
+        "-i", "--input", 
+        help="Ruta de la carpeta que contiene los archivos HTML"
     )
     parser.add_argument(
-        "-o",
-        "--output",
-        help="Nombre del archivo PDF de salida. Si no se especifica una ruta, se guardará en la misma carpeta que los archivos HTML",
+        "-o", "--output",
+        help="Nombre del archivo PDF de salida (si no se especifica ruta, se guardará en la misma carpeta que los HTML)"
     )
     parser.add_argument(
-        "-p",
-        "--portrait",
+        "-p", "--portrait",
         action="store_true",
-        help="Usar orientación vertical (portrait) en lugar de apaisada (landscape)",
+        help="Usar orientación vertical (portrait) en lugar de apaisada (landscape)"
     )
     parser.add_argument(
-        "--interactive", action="store_true", help="Usar modo interactivo"
+        "--interactive", 
+        action="store_true", 
+        help="Usar modo interactivo"
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    print("--- Creador de PDF a partir de Múltiples Archivos HTML (Linux) ---")
-    print("Este script toma todos los archivos .html de una carpeta especificada,")
-    print("los ordena alfabéticamente y los une en un solo archivo PDF.")
-    print("Cada archivo HTML se renderizará, por defecto, en formato A4 apaisado.\n")
-    print("\n---------------------------------------------------------------------\n")
 
-    # Determinar si usar modo interactivo o argumentos de línea de comandos
-    if args.interactive or (not args.input):
+def show_welcome_message():
+    """
+    Muestra el mensaje de bienvenida al usuario.
+    """
+    print("--- Creador de PDF a partir de Múltiples Archivos HTML ---")
+    print("Este script combina archivos HTML en una carpeta en un solo PDF.")
+    print("Los archivos se ordenan numéricamente y mantienen su formato.")
+    print("---------------------------------------------------------------------")
+
+
+def get_input_parameters(args):
+    """
+    Obtiene los parámetros de entrada desde línea de comandos o modo interactivo.
+    
+    Args:
+        args: Argumentos de línea de comandos
+        
+    Returns:
+        tuple: (input_directory, output_pdf_name, page_orientation)
+    """
+    # Modo interactivo o sin especificar carpeta de entrada
+    if args.interactive or not args.input:
         try:
-            # Modo interactivo con historial
+            # Obtener directorio de entrada desde el historial
             input_directory = get_input_directory_with_history()
-
-            # Sugerir un nombre de archivo por defecto en la misma carpeta
-            default_output_name = os.path.join(input_directory, "output.pdf")
-            output_prompt = f"Ingresa el nombre para el archivo PDF de salida [predeterminado: {default_output_name}]: "
-
+            
+            # Sugerir nombre de archivo por defecto
+            default_output = os.path.join(input_directory, "output.pdf")
+            output_prompt = f"Nombre del PDF [predeterminado: {os.path.basename(default_output)}]: "
+            
             try:
                 output_pdf_name = input(output_prompt).strip()
+                if not output_pdf_name:
+                    output_pdf_name = default_output
+                elif not os.path.isabs(output_pdf_name) and not os.path.dirname(output_pdf_name):
+                    output_pdf_name = os.path.join(input_directory, output_pdf_name)
             except EOFError:
-                print(f"\nUsando nombre predeterminado: {default_output_name}")
-                output_pdf_name = ""
-
-            # Si no se proporciona un nombre, usar el predeterminado
-            if not output_pdf_name:
-                output_pdf_name = default_output_name
-            # Si solo se proporciona un nombre sin ruta, colocarlo en la carpeta de entrada
-            elif not os.path.isabs(output_pdf_name) and not os.path.dirname(
-                output_pdf_name
-            ):
-                output_pdf_name = os.path.join(input_directory, output_pdf_name)
-
-            # Preguntar por la orientación
+                print(f"\nUsando nombre predeterminado: {os.path.basename(default_output)}")
+                output_pdf_name = default_output
+            
+            # Preguntar por orientación
             try:
-                orientation_choice = input(
-                    "Orientación: (1 -> portrait, 2 -> landscape): "
-                ).strip()
+                choice = input("Orientación: (1 -> portrait, 2 -> landscape): ").strip()
+                page_orientation = "portrait" if choice == "1" else "landscape"
             except EOFError:
                 print("\nUsando orientación predeterminada: landscape")
-                orientation_choice = "2"
-
-            # Determinar la orientación basada en la elección del usuario
-            page_orientation = "portrait" if orientation_choice == "1" else "landscape"
+                page_orientation = "landscape"
+                
         except Exception as e:
             print(f"\nError en modo interactivo: {e}")
             print("Ejecutando en modo no interactivo con valores predeterminados.")
-
-            # Usar valores predeterminados o argumentos de línea de comandos si están disponibles
-            if args.input:
-                input_directory = args.input
-            else:
-                print(
-                    "Error: Se requiere especificar la carpeta de entrada con --input"
-                )
+            
+            if not args.input:
+                print("Error: Se requiere especificar la carpeta de entrada con --input")
                 sys.exit(1)
-
-            if args.output:
-                output_pdf_name = args.output
-            else:
-                output_pdf_name = os.path.join(input_directory, "output.pdf")
-
+                
+            input_directory = args.input
+            output_pdf_name = args.output or os.path.join(input_directory, "output.pdf")
             page_orientation = "portrait" if args.portrait else "landscape"
     else:
-        # Modo no interactivo (argumentos de línea de comandos)
-        if not args.input:
-            print("Error: Se requiere especificar la carpeta de entrada con --input")
-            sys.exit(1)
-
+        # Modo no interactivo
         input_directory = args.input
-
-        # Si no se especifica un archivo de salida, usar uno predeterminado en la misma carpeta
+        
+        # Determinar archivo de salida
         if not args.output:
             output_pdf_name = os.path.join(input_directory, "output.pdf")
             print(f"No se especificó archivo de salida. Usando: {output_pdf_name}")
         else:
             output_pdf_name = args.output
-            # Si solo se proporciona un nombre sin ruta, colocarlo en la carpeta de entrada
-            if not os.path.isabs(output_pdf_name) and not os.path.dirname(
-                output_pdf_name
-            ):
+            # Si solo es un nombre sin ruta, colocarlo en la carpeta de entrada
+            if not os.path.isabs(output_pdf_name) and not os.path.dirname(output_pdf_name):
                 output_pdf_name = os.path.join(input_directory, output_pdf_name)
-
-        # Usar la orientación de los argumentos de línea de comandos
+        
+        # Determinar orientación
         page_orientation = "portrait" if args.portrait else "landscape"
-
-    # Asegurar que el nombre del archivo termine en .pdf
+    
+    # Asegurar que el nombre termine en .pdf
     if not output_pdf_name.lower().endswith(".pdf"):
         output_pdf_name += ".pdf"
+    
+    return input_directory, output_pdf_name, page_orientation
 
-    # Mostrar la orientación seleccionada
-    orientation_display = (
-        "vertical (portrait)"
-        if page_orientation == "portrait"
-        else "apaisada (landscape)"
-    )
+
+def main():
+    """
+    Función principal del programa.
+    """
+    # Obtener argumentos
+    args = parse_args()
+    
+    # Mostrar bienvenida
+    show_welcome_message()
+    
+    # Obtener parámetros
+    input_directory, output_pdf_name, orientation = get_input_parameters(args)
+    
+    # Mostrar información de la orientación seleccionada
+    orientation_display = "vertical (portrait)" if orientation == "portrait" else "apaisada (landscape)"
     print(f"\nUsando orientación {orientation_display} para el PDF.")
-
-    # Actualizar el historial con la ruta de entrada usada
+    
+    # Actualizar historial
     update_input_history(input_directory)
+    
+    # Crear PDF
+    create_pdf_from_html_folder(input_directory, output_pdf_name, orientation)
 
-    # Crear el PDF a partir de los archivos HTML
-    create_pdf_from_html_folder(input_directory, output_pdf_name, page_orientation)
+
+if __name__ == "__main__":
+    main()
