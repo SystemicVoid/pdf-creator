@@ -435,8 +435,17 @@ def get_input_parameters(args):
             # Obtener directorio de entrada desde el historial
             input_directory = get_input_directory_with_history()
             
-            # Sugerir nombre de archivo por defecto
-            default_output = os.path.join(input_directory, "output.pdf")
+            # Buscar archivos HTML y usar el nombre del primero como base para el PDF
+            html_files = find_html_files(input_directory)
+            if html_files:
+                # Tomar el nombre del primer archivo HTML y cambiar la extensión a .pdf
+                first_file_name = os.path.basename(html_files[0])
+                default_pdf_name = os.path.splitext(first_file_name)[0] + '.pdf'
+                default_output = os.path.join(input_directory, default_pdf_name)
+            else:
+                # Si no hay archivos HTML, usar el nombre predeterminado
+                default_output = os.path.join(input_directory, "output.pdf")
+                
             output_prompt = f"Nombre del PDF [predeterminado: {os.path.basename(default_output)}]: "
             
             try:
@@ -474,7 +483,17 @@ def get_input_parameters(args):
         
         # Determinar archivo de salida
         if not args.output:
-            output_pdf_name = os.path.join(input_directory, "output.pdf")
+            # Buscar archivos HTML y usar el nombre del primero como base para el PDF
+            html_files = find_html_files(input_directory)
+            if html_files:
+                # Tomar el nombre del primer archivo HTML y cambiar la extensión a .pdf
+                first_file_name = os.path.basename(html_files[0])
+                default_pdf_name = os.path.splitext(first_file_name)[0] + '.pdf'
+                output_pdf_name = os.path.join(input_directory, default_pdf_name)
+            else:
+                # Si no hay archivos HTML, usar el nombre predeterminado
+                output_pdf_name = os.path.join(input_directory, "output.pdf")
+                
             print(f"No se especificó archivo de salida. Usando: {output_pdf_name}")
         else:
             output_pdf_name = args.output
